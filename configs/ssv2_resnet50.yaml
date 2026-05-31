@@ -1,0 +1,57 @@
+# MANTA Configuration — Something-Something v2 with ResNet-50
+# Paper: arXiv:2412.07481v7 (AAAI 2025)
+# Target: Table 1 — SSv2 5-way 1-shot: 63.4%, 5-shot: 87.4%
+#
+# IMPORTANT: SSv2 is a temporal-sensitive dataset (direction matters!)
+#   - No horizontal flip (flipping changes action semantics)
+#   - Requires more training tasks (75,000 vs 10,000)
+
+model:
+  backbone: resnet50
+  d_model: 2048
+  scales: [1, 2, 4]          # O — multi-scale set
+  d_state: 64
+  d_conv: 4
+  expand: 2
+  temperature: 0.07          # τ
+  lambda_ce: 4.0             # λ
+  pretrained_backbone: true
+  freeze_backbone: true
+
+data:
+  dataset: ssv2
+  frame_dir: data/ssv2/frames
+  split_dir: data/ssv2/splits
+  num_frames: 8              # F
+  image_size: 224
+  resize_size: 256
+  use_horizontal_flip: false  # CRITICAL: SSv2 is direction-sensitive!
+
+episode:
+  n_way: 5
+  k_shot: 1
+  num_query: 5
+
+training:
+  num_tasks: 75000           # SSv2 needs more training (paper specification)
+  batch_size: 1
+  optimizer: sgd
+  lr: 0.001
+  momentum: 0.9
+  weight_decay: 0.0005
+  lr_scheduler: cosine
+  min_lr: 0.000001
+  grad_clip: 10.0
+  log_interval: 100
+  save_interval: 10000
+  seed: 42
+  num_workers: 8
+
+evaluation:
+  interval: 2000             # Validate every 2000 tasks
+  val_tasks: 600
+  num_tasks: 10000
+
+output:
+  save_dir: checkpoints/ssv2_rn50_5way1shot_f8
+  log_dir: logs/ssv2_rn50_5way1shot_f8

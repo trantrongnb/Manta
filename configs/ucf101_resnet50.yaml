@@ -1,0 +1,53 @@
+# MANTA Configuration — UCF101 with ResNet-50
+# Paper: arXiv:2412.07481v7 (AAAI 2025)
+# Target: Table 1 — UCF101 5-way 1-shot: 95.9%
+
+model:
+  backbone: resnet50
+  d_model: 2048
+  scales: [1, 2, 4]
+  d_state: 64
+  d_conv: 4
+  expand: 2
+  temperature: 0.07
+  lambda_ce: 4.0
+  pretrained_backbone: true
+  freeze_backbone: true
+
+data:
+  dataset: ucf101
+  frame_dir: data/ucf101/frames
+  split_dir: data/ucf101/splits
+  num_frames: 8
+  image_size: 224
+  resize_size: 256
+  use_horizontal_flip: true
+
+episode:
+  n_way: 5
+  k_shot: 1
+  num_query: 5
+
+training:
+  num_tasks: 10000
+  batch_size: 1
+  optimizer: sgd
+  lr: 0.001
+  momentum: 0.9
+  weight_decay: 0.0005
+  lr_scheduler: cosine
+  min_lr: 0.000001
+  grad_clip: 10.0
+  log_interval: 100
+  save_interval: 5000
+  seed: 42
+  num_workers: 8
+
+evaluation:
+  interval: 1000
+  val_tasks: 600
+  num_tasks: 10000
+
+output:
+  save_dir: checkpoints/ucf101_rn50_5way1shot_f8
+  log_dir: logs/ucf101_rn50_5way1shot_f8

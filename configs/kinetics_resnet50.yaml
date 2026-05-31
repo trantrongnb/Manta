@@ -1,0 +1,53 @@
+# MANTA Configuration — Kinetics-100 with ResNet-50
+# Paper: arXiv:2412.07481v7 (AAAI 2025)
+# Target: Table 1 — Kinetics 5-way 1-shot: 82.4%, 5-shot: 94.2%
+
+model:
+  backbone: resnet50
+  d_model: 2048              # ResNet-50 output dimension
+  scales: [1, 2, 4]          # O — multi-scale set (Table 3 ablation)
+  d_state: 64                # Mamba-2 state space dimension
+  d_conv: 4                  # Mamba-2 local convolution width
+  expand: 2                  # Mamba-2 expansion factor
+  temperature: 0.07          # τ — contrastive temperature
+  lambda_ce: 4.0             # λ — cross-entropy loss weight (Eq. 14)
+  pretrained_backbone: true  # Use ImageNet pretrained weights
+  freeze_backbone: true      # Freeze backbone during training
+
+data:
+  dataset: kinetics
+  frame_dir: data/kinetics/frames
+  split_dir: data/kinetics/splits
+  num_frames: 8              # F — number of frames per sub-sequence
+  image_size: 224            # Crop size (224×224)
+  resize_size: 256           # Resize before crop
+  use_horizontal_flip: true  # Random horizontal flip (OK for Kinetics)
+
+episode:
+  n_way: 5                   # 5-way classification
+  k_shot: 1                  # 1-shot (change to 5 for 5-shot)
+  num_query: 5               # 5 query samples per class
+
+training:
+  num_tasks: 10000           # Number of training episodes
+  batch_size: 1              # 1 episode per optimization step
+  optimizer: sgd
+  lr: 0.001                  # Initial learning rate
+  momentum: 0.9
+  weight_decay: 0.0005       # L2 regularization
+  lr_scheduler: cosine       # Cosine annealing
+  min_lr: 0.000001           # Minimum LR for cosine schedule
+  grad_clip: 10.0            # Gradient clipping max norm
+  log_interval: 100          # Log every N tasks
+  save_interval: 5000        # Save checkpoint every N tasks
+  seed: 42
+  num_workers: 8
+
+evaluation:
+  interval: 1000             # Validate every N training tasks
+  val_tasks: 600             # Number of validation episodes
+  num_tasks: 10000           # Number of test episodes (final eval)
+
+output:
+  save_dir: checkpoints/kinetics_rn50_5way1shot_f8
+  log_dir: logs/kinetics_rn50_5way1shot_f8

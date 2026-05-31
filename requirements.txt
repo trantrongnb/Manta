@@ -1,0 +1,35 @@
+# MANTA: Enhancing Mamba for Few-Shot Action Recognition of Long Sub-Sequence
+# Paper: arXiv:2412.07481v7 — AAAI 2025
+
+# Core
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Mamba-2 (core component)
+mamba-ssm>=2.2.2
+causal-conv1d>=1.4.0
+
+# Vision
+timm==0.9.16
+einops==0.7.0
+
+# Video processing
+opencv-python==4.9.0.80
+decord==0.6.0
+av==12.0.0
+
+# Scientific
+numpy==1.26.4
+scipy==1.13.0
+scikit-learn==1.4.2
+
+# Training utilities
+tensorboard==2.16.2
+tqdm==4.66.2
+pyyaml==6.0.1
+omegaconf==2.3.0
+
+# Optional: experiment tracking
+wandb==0.17.0
+matplotlib
+seaborn
