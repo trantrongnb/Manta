@@ -20,14 +20,19 @@ import argparse
 import json
 from datetime import datetime
 
-import numpy as np
+# === HOTFIX FOR RTX 5090 (sm_120) / MPS BYPASS ===
+# Disable cuDNN to prevent CUDNN_STATUS_NOT_INITIALIZED crashes
 import torch
+torch.backends.cudnn.enabled = False
+
+import numpy as np
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from models.manta import Manta
 from datasets.video_dataset import VideoDataset
-from datasets.episode_sampler import EpisodicSampler
+from datasets.episode_sampler import EpisodicSampler, EpisodeDataset
+from torch.utils.data import DataLoader
 from utils.metrics import compute_accuracy, confidence_interval
 
 
@@ -98,16 +103,26 @@ def test(
     episode_accuracies = []
     episode_distances = []
 
+    test_episode_ds = EpisodeDataset(
+        dataset=test_dataset,
+        num_episodes=num_tasks,
+        n_way=cfg.episode.n_way,
+        k_shot=cfg.episode.k_shot,
+        n_query=cfg.episode.num_query,
+    )
+    test_loader = DataLoader(
+        test_episode_ds,
+        batch_size=None,
+        num_workers=8,
+        pin_memory=True,
+    )
+
     with torch.no_grad():
-        for task_idx in tqdm(range(num_tasks), desc="Testing", ncols=80):
-            # Sample test episode
-            support, query, sup_labels, que_labels = EpisodicSampler.sample_episode(
-                dataset=test_dataset,
-                n_way=cfg.episode.n_way,
-                k_shot=cfg.episode.k_shot,
-                n_query=cfg.episode.num_query,
-                device=device,
-            )
+        for support, query, sup_labels, que_labels in tqdm(test_loader, desc="Testing", ncols=80):
+            support = support.to(device, non_blocking=True)
+            query = query.to(device, non_blocking=True)
+            sup_labels = sup_labels.to(device, non_blocking=True)
+            que_labels = que_labels.to(device, non_blocking=True)
 
             # Forward pass (test mode — no loss computation)
             result = model(

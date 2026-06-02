@@ -1,6 +1,5 @@
-# MANTA Configuration — LSA64 (Argentine Sign Language) with ResNet-50
-# Dataset: 64 classes, 50 videos/class (10 subjects × 5 samples)
-# Split: 38 train / 12 val / 14 test classes (disjoint)
+# MANTA Configuration — WLASL with ResNet-50
+# Dataset: WLASL (Word-Level American Sign Language)
 #
 # Paper: Similar setup to Kinetics/UCF101 (spatial dataset, 10,000 training tasks)
 
@@ -18,14 +17,14 @@ model:
   backbone_weights_path: pretrained/resnet50_imagenet.pth  # Local weights file (comment out to auto-download)
 
 data:
-  dataset: lsa64
-  split_dir: data/lsa64/splits     # train.txt / val.txt / test.txt
+  dataset: wlasl
+  split_dir: data/wlasl/splits # train.txt / val.txt / test.txt
 
   # Frame sampling — default F=8 per paper's regular setup
-  num_frames: 16              # F — frames per sub-sequence (use 16 for long sub-sequence)
+  num_frames: 16             # F — frames per sub-sequence
   image_size: 224            # Crop size (224×224)
   resize_size: 256           # Resize before crop
-  use_horizontal_flip: true  # Random horizontal flip (sign language is not direction-sensitive like SSv2)
+  use_horizontal_flip: true  # Random horizontal flip
 
 episode:
   n_way: 5                   # 5-way classification
@@ -33,7 +32,7 @@ episode:
   num_query: 5               # 5 query samples per class
 
 training:
-  num_tasks: 10000           # Number of training episodes (same as Kinetics/UCF101/HMDB51)
+  num_tasks: 10000           # Number of training episodes
   batch_size: 1              # 1 episode per optimization step
   optimizer: sgd
   lr: 0.001                  # Initial learning rate
@@ -53,5 +52,5 @@ evaluation:
   num_tasks: 10000           # Number of test episodes (final eval)
 
 output:
-  save_dir: checkpoints/lsa64/rn50_5way1shot_f16
-  log_dir: logs/lsa64/rn50_5way1shot_f16
+  save_dir: checkpoints/wlasl_rn50_5way1shot_f16
+  log_dir: logs/wlasl_rn50_5way1shot_f16

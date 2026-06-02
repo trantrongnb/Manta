@@ -84,13 +84,12 @@ class EpisodicSampler:
             class_video_paths = dataset.get_class_videos(class_name)
             total_needed = k_shot + n_query
 
-            assert len(class_video_paths) >= total_needed, (
-                f"Class '{class_name}' has {len(class_video_paths)} videos "
-                f"but needs {total_needed} (K={k_shot} + n_query={n_query})"
-            )
-
-            # Step 3: Randomly select K+n_query disjoint videos
-            selected_videos = random.sample(class_video_paths, total_needed)
+            # Fallback for datasets with very few videos per class (e.g. WLASL)
+            if len(class_video_paths) >= total_needed:
+                selected_videos = random.sample(class_video_paths, total_needed)
+            else:
+                # Not enough unique videos -> sample with replacement
+                selected_videos = random.choices(class_video_paths, k=total_needed)
 
             # First K videos → support, remaining → query
             support_paths = selected_videos[:k_shot]
