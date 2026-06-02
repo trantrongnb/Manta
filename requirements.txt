@@ -1,13 +1,16 @@
-# MANTA: Enhancing Mamba for Few-Shot Action Recognition of Long Sub-Sequence
-# Paper: arXiv:2412.07481v7 — AAAI 2025
+# MANTA: Enhancing Mamba for Few-Shot Action Recognition
+# RTX 5090 (Blackwell - sm_120) Compatible Requirements
 
-# Core
-torch>=2.1.0
-torchvision>=0.16.0
+# ======================================================================
+# BƯỚC 1: Cài đặt PyTorch Nightly (cu128) để hỗ trợ RTX 5090
+# Chạy lệnh này ĐẦU TIÊN (nếu chưa cài):
+# pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# ======================================================================
 
-# Mamba-2 (core component)
-mamba-ssm>=2.2.2
-causal-conv1d>=1.4.0
+# ======================================================================
+# BƯỚC 2: Cài đặt các thư viện tiêu chuẩn
+# Chạy lệnh: pip install -r requirements.txt
+# ======================================================================
 
 # Vision
 timm==0.9.16
@@ -33,3 +36,12 @@ omegaconf==2.3.0
 wandb==0.17.0
 matplotlib
 seaborn
+
+# ======================================================================
+# BƯỚC 3: Compile thư viện CUDA (Mamba-SSM và Causal-Conv1d)
+# Chạy lệnh này SAU CÙNG. Bắt buộc phải có --no-build-isolation để 
+# ép thư viện compile bằng đúng bản PyTorch 2.11 vừa cài ở Bước 1.
+#
+# Lệnh:
+# pip install causal-conv1d>=1.4.0 mamba-ssm>=2.2.2 --no-build-isolation
+# ======================================================================

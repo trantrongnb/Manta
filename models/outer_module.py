@@ -1,7 +1,7 @@
 """
 Outer Module — Implicit Temporal Alignment via Bidirectional Mamba-2.
 
-Paper Section 3.2, Eq. (5)-(6):
+Paper Section 3.2, Eq. (5)-(6), Algorithm 1:
     "The Outer Module performs implicit temporal alignment across the entire
      enhanced sub-sequence using bidirectional Mamba-2 with SHARED parameters
      and learnable scale weights from a Conv2D Block."
@@ -12,15 +12,18 @@ Key design choices (from paper Table II ablation):
     - Learnable weights wₒ computed via Conv2D Block (CB)
     - Output: wₒ ⊗ OM(enhanced_seq)  (element-wise multiplication)
 
-Algorithm:
-    Given enhanced sequence Ṡ ∈ ℝ^{F×D} from Inner Module:
-        1. h_fw = Mamba2_shared(LayerNorm(Ṡ))                — forward scan
-        2. h_bw = Mamba2_shared(LayerNorm(flip(Ṡ)))          — backward scan (SAME weights)
-        3. h_bw = flip(h_bw)                                  — re-align
-        4. om_out = W_o · [h_fw; h_bw]                        — concat and project
-        5. wₒ = σ(CB([Ṡ^ck_fo ⊕ S^c_k]))                    — learnable weights via Conv2D Block
-           NOTE: ⊕ = concatenation along CHANNEL dimension (not addition!)
-        6. scale_out = wₒ ⊗ om_out                            — weighted output
+Algorithm 1 Structure:
+    The OM (bidirectional Mamba scan) is used INSIDE the inner loop to
+    incrementally process the growing sequence. The Conv2D Block and
+    Sigmoid are applied AFTER the loop completes.
+
+    Inside loop (line 11): Ĩ ← OM(Concat(Ĩ, E, dim=0))
+    After loop (line 14-15):
+        w ← Sigmoid(CB(Ĩ ⊕ I))
+        ˚I ← w ⊗ Ĩ
+
+    The OM component: OM(·) = Linear[OM_Fw(·) ⊕ OM_Bw(·)] ∈ R^{F×D}
+    The CB component: w = σ(CB([enhanced ⊕ original]))
 
     Eq. (5): wₒ = σ(CB([Ṡ^ck_fo ⊕ S^c_k]))   — ⊕ is CONCATENATION
     Eq. (6): Ṡ^ck_fo = wₒ ⊗ OM(Ṡ^ck_fo)
@@ -86,6 +89,11 @@ class OuterModule(nn.Module):
     Key property: Fw and Bw branches SHARE the same Mamba-2 instance (S-P).
     This is critical — paper ablation (Table II) shows S-P outperforms I-P for OM.
     
+    This module exposes two sub-operations per Algorithm 1:
+        1. mamba_scan(): Bidirectional Mamba-2 scan only (used inside inner loop)
+        2. compute_weights(): Conv2D Block + Sigmoid for learnable weights (after loop)
+        3. forward(): Full pipeline (scan + weights + multiply) for convenience
+    
     Args:
         d_model: Feature dimension D (default 2048)
         d_state: SSM state dimension (default 64)
@@ -123,13 +131,74 @@ class OuterModule(nn.Module):
         self.conv_block = Conv2DBlock(in_channels=2)
         self.sigmoid = nn.Sigmoid()
 
+    def mamba_scan(self, seq: torch.Tensor) -> torch.Tensor:
+        """
+        Bidirectional Mamba-2 scan ONLY (no weights).
+        
+        This implements the OM(·) operation from the paper:
+            OM(·) = Linear[OM_Fw(·) ⊕ OM_Bw(·)] ∈ R^{L×D}
+        
+        Used INSIDE the inner loop of Algorithm 1 (line 11):
+            Ĩ ← OM(Concat(Ĩ, E, dim=0))
+        
+        Args:
+            seq: [B, L, D] — input sequence of any length L
+        
+        Returns:
+            [B, L, D] — bidirectionally scanned and projected output
+        """
+        normed = self.norm(seq)
+
+        # Forward scan
+        fw_out = self.mamba2_shared(normed)  # [B, L, D]
+
+        # Backward scan (same Mamba-2 instance, flipped input)
+        bw_out = self.mamba2_shared(normed.flip(dims=[1]))  # [B, L, D]
+        bw_out = bw_out.flip(dims=[1])  # Re-align temporal order
+
+        # Concatenate and project
+        om_out = self.out_proj(
+            torch.cat([fw_out, bw_out], dim=-1)
+        )  # [B, L, D]
+
+        return om_out
+
+    def compute_weights(
+        self,
+        enhanced_seq: torch.Tensor,
+        orig_seq: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute learnable weights wₒ via Conv2D Block (Eq. 5).
+        
+        Used AFTER the inner loop of Algorithm 1 (line 14):
+            w ← Sigmoid(CB(Ĩ ⊕ I))
+        
+        Args:
+            enhanced_seq: [B, F, D] — enhanced sequence (Ĩ from Algorithm 1)
+            orig_seq:     [B, F, D] — original features (I)
+        
+        Returns:
+            [B, F, D] — learnable weights wₒ ∈ (0, 1)
+        """
+        # CONCATENATION ⊕ along channel dimension (NOT addition!)
+        weight_input = torch.cat([
+            enhanced_seq.unsqueeze(1),  # [B, 1, F, D] — channel 0: enhanced
+            orig_seq.unsqueeze(1),      # [B, 1, F, D] — channel 1: original
+        ], dim=1)  # [B, 2, F, D]
+
+        w = self.conv_block(weight_input)  # [B, 1, F, D]
+        w = self.sigmoid(w.squeeze(1))     # [B, F, D]
+
+        return w
+
     def forward(
         self,
         enhanced_seq: torch.Tensor,
         orig_seq: torch.Tensor,
     ) -> tuple:
         """
-        Compute temporally-aligned output with learnable scale weights.
+        Full Outer Module pipeline: Mamba scan + weights + multiply.
 
         Implements Eq. (5)-(6):
             wₒ = σ(CB([Ṡ^ck_fo ⊕ S^c_k]))    — ⊕ = concatenation along channel
@@ -144,36 +213,13 @@ class OuterModule(nn.Module):
                 scale_output: [B, F, D] — wₒ ⊗ OM(·), the final scale output
                 weights:      [B, F, D] — learnable weights wₒ for analysis/visualization
         """
-        B, F, D = enhanced_seq.shape
+        # Bidirectional Mamba scan
+        om_out = self.mamba_scan(enhanced_seq)  # [B, F, D]
 
-        # === Bidirectional Mamba-2 with SHARED parameters ===
-        normed = self.norm(enhanced_seq)
+        # Learnable weights (Eq. 5)
+        w = self.compute_weights(enhanced_seq, orig_seq)  # [B, F, D]
 
-        # Forward scan
-        fw_out = self.mamba2_shared(normed)  # [B, F, D]
-
-        # Backward scan (same Mamba-2 instance, flipped input)
-        bw_out = self.mamba2_shared(normed.flip(dims=[1]))  # [B, F, D]
-        bw_out = bw_out.flip(dims=[1])  # Re-align temporal order
-
-        # Concatenate and project
-        om_out = self.out_proj(
-            torch.cat([fw_out, bw_out], dim=-1)
-        )  # [B, F, D]
-
-        # === Learnable weights wₒ via Conv2D Block (Eq. 5) ===
-        # CONCATENATION ⊕ along channel dimension (NOT addition!)
-        # enhanced_seq → [B, 1, F, D], orig_seq → [B, 1, F, D]
-        # concat → [B, 2, F, D]
-        weight_input = torch.cat([
-            enhanced_seq.unsqueeze(1),  # [B, 1, F, D] — channel 0: enhanced
-            orig_seq.unsqueeze(1),      # [B, 1, F, D] — channel 1: original
-        ], dim=1)  # [B, 2, F, D] — ⊕ concatenation
-
-        w = self.conv_block(weight_input)  # [B, 1, F, D]
-        w = self.sigmoid(w.squeeze(1))     # [B, F, D] — values in (0, 1)
-
-        # === Scale output (Eq. 6): Ṡ^ck_fo = wₒ ⊗ OM(·) ===
-        scale_out = w * om_out  # [B, F, D] — element-wise multiplication
+        # Scale output (Eq. 6): Ṡ^ck_fo = wₒ ⊗ OM(·)
+        scale_out = w * om_out  # [B, F, D]
 
         return scale_out, w

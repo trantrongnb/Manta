@@ -160,3 +160,35 @@ class EpisodicSampler:
             )
             episodes.append(episode)
         return episodes
+
+
+class EpisodeDataset(torch.utils.data.Dataset):
+    """
+    Wrapper to allow episodic sampling via PyTorch DataLoader for multiprocessing.
+    """
+    def __init__(
+        self,
+        dataset: VideoDataset,
+        num_episodes: int,
+        n_way: int = 5,
+        k_shot: int = 1,
+        n_query: int = 5,
+    ):
+        self.dataset = dataset
+        self.num_episodes = num_episodes
+        self.n_way = n_way
+        self.k_shot = k_shot
+        self.n_query = n_query
+
+    def __len__(self) -> int:
+        return self.num_episodes
+
+    def __getitem__(self, idx: int):
+        # Always return tensors on CPU to allow multiprocessing
+        return EpisodicSampler.sample_episode(
+            dataset=self.dataset,
+            n_way=self.n_way,
+            k_shot=self.k_shot,
+            n_query=self.n_query,
+            device=torch.device('cpu')
+        )

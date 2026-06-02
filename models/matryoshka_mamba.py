@@ -1,7 +1,7 @@
 """
 Matryoshka Mamba — Multi-Scale Nested Mamba Structure.
 
-Paper Section 3.2, Algorithm 1, Eq. (7):
+Paper Section 3.2, Algorithm 1, Eq. (4)-(7):
     "Matryoshka Mamba processes sub-sequences at multiple temporal scales
      O = {o₁, o₂, ..., o_|O|} simultaneously, where each scale o defines
      the fragment length for the Inner Module."
@@ -10,17 +10,20 @@ The name "Matryoshka" comes from Russian nesting dolls — the multi-scale
 structure is analogous to nested dolls of different sizes.
 
 Algorithm 1 (Matryoshka Mamba):
-    Input:  S^c_k ∈ ℝ^{F×D} — per-frame features from backbone
-    Output: Ŝ^c_k ∈ ℝ^{F×D} — enhanced features
+    Input:  I ∈ ℝ^{F×D} — per-frame features from backbone
+    Output: Î ∈ ℝ^{F×D} — enhanced features
 
     For each scale o ∈ O = {1, 2, 4}:
-        1. Divide S^c_k into F/o non-overlapping fragments of length o
-        2. Apply Inner Module to each fragment → Ṡ^ck_i (local enhancement)
-        3. Concatenate fragments → Ṡ^ck_fo (full enhanced sequence)
-        4. Apply Outer Module: scale_out = wₒ ⊗ OM(Ṡ^ck_fo, S^c_k)
+        1. Divide I into F/o non-overlapping fragments of length o
+        2. For each fragment i:
+           a. E ← IM(I[i*o : (i+1)*o]) + I[i*o : (i+1)*o]  (inner module + residual)
+           b. If first fragment: Ĩ ← E
+           c. Else: Ĩ ← OM(Concat(Ĩ, E, dim=0))  (outer module on growing sequence)
+        3. Compute weights: w ← σ(CB(Ĩ ⊕ I))
+        4. Scale output: ˚I ← w ⊗ Ĩ
 
     Final output (Eq. 7):
-        Ŝ^c_k = (1/|O|) × Σ_{o∈O} Ṡ^ck_fo
+        Î = (1/|O|) × Σ_{o∈O} ˚I_o
 
     Complexity: O(F × |O|) — linear in sequence length F
 
@@ -33,16 +36,18 @@ Design choices:
 import torch
 import torch.nn as nn
 
-from models.inner_module import InnerModule, apply_inner_module_to_sequence
+from models.inner_module import InnerModule
 from models.outer_module import OuterModule
 
 
 class MatryoshkaMamba(nn.Module):
     """
-    Multi-scale Matryoshka Mamba module.
+    Multi-scale Matryoshka Mamba module implementing Algorithm 1.
     
-    Processes input features at multiple temporal granularities and
-    averages the results for robust temporal representation.
+    Processes input features at multiple temporal granularities using
+    an incremental approach: Inner Module enhances local fragments,
+    then Outer Module progressively aligns them through bidirectional
+    Mamba scanning.
     
     Args:
         d_model: Feature dimension D (default 2048 for ResNet-50)
@@ -84,12 +89,74 @@ class MatryoshkaMamba(nn.Module):
             expand=expand,
         )
 
+    def _process_scale(
+        self,
+        features: torch.Tensor,
+        scale_o: int,
+    ) -> tuple:
+        """
+        Process a single scale following Algorithm 1 inner loop.
+        
+        Implements the incremental OM approach:
+            For each fragment:
+                E ← IM(fragment) + fragment  (residual)
+                Ĩ ← OM(Concat(Ĩ, E, dim=0))  (incremental alignment)
+            After loop:
+                w ← σ(CB(Ĩ ⊕ I))
+                ˚I ← w ⊗ Ĩ
+        
+        Args:
+            features: [B, F, D] — input per-frame features
+            scale_o: Fragment size o
+        
+        Returns:
+            tuple of:
+                scale_output: [B, F, D] — w ⊗ Ĩ
+                weights: [B, F, D] — learnable weights
+        """
+        B, F, D = features.shape
+        inner_module = self.inner_modules[str(scale_o)]
+        num_fragments = F // scale_o
+
+        # ======== Algorithm 1 Inner Loop (lines 5-13) ========
+        I_tilde = None  # Ĩ — accumulates enhanced + OM-aligned sequence
+
+        for i in range(num_fragments):
+            # Extract fragment: I[i*o : (i+1)*o, :]
+            start_idx = i * scale_o
+            end_idx = (i + 1) * scale_o
+            fragment = features[:, start_idx:end_idx, :]  # [B, o, D]
+
+            # Line 6: E ← IM(fragment) ⊕ fragment (⊕ = addition, residual)
+            # Note: InnerModule already includes residual connection internally
+            E = inner_module(fragment)  # [B, o, D] — enhanced fragment with residual
+
+            if I_tilde is None:
+                # Line 8: First fragment — Ĩ ← E
+                I_tilde = E  # [B, o, D]
+            else:
+                # Line 11: Ĩ ← OM(Concat(Ĩ, E, dim=0))
+                # Concat along temporal dimension, then apply OM
+                I_tilde = torch.cat([I_tilde, E], dim=1)  # [B, current_len + o, D]
+                I_tilde = self.outer_module.mamba_scan(I_tilde)  # [B, current_len + o, D]
+
+        # ======== Algorithm 1 After Loop (lines 14-15) ========
+        # Line 14: w ← Sigmoid(CB(Ĩ ⊕ I))
+        # Ĩ now has shape [B, F, D] (accumulated all fragments)
+        w = self.outer_module.compute_weights(I_tilde, features)  # [B, F, D]
+
+        # Line 15: ˚I ← w ⊗ Ĩ
+        # Note: Ĩ has already been processed through OM in the loop
+        scale_output = w * I_tilde  # [B, F, D]
+
+        return scale_output, w
+
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """
         Multi-scale processing following Algorithm 1.
 
         Implements Eq. (7):
-            Ŝ^c_k = (1/|O|) × Σ_{o∈O} [wₒ ⊗ OM(IM_o(S^c_k), S^c_k)]
+            Î = (1/|O|) × Σ_{o∈O} ˚I_o
 
         Args:
             features: [B, F, D] — per-frame features from backbone
@@ -105,15 +172,8 @@ class MatryoshkaMamba(nn.Module):
             if F % o != 0:
                 continue
 
-            # Step 1-3: Inner Module — local fragment enhancement at scale o
-            inner_module = self.inner_modules[str(o)]
-            enhanced = apply_inner_module_to_sequence(features, inner_module, o)
-            # enhanced: [B, F, D] — locally enhanced sequence
-
-            # Step 4: Outer Module — temporal alignment + learnable weights
-            scale_out, _weights = self.outer_module(enhanced, features)
-            # scale_out: [B, F, D] — wₒ ⊗ OM(enhanced, original)
-
+            # Process this scale following Algorithm 1
+            scale_out, _weights = self._process_scale(features, o)
             scale_outputs.append(scale_out)
 
         # Fallback: if no valid scales, return original features
@@ -145,10 +205,7 @@ class MatryoshkaMamba(nn.Module):
             if F % o != 0:
                 continue
 
-            inner_module = self.inner_modules[str(o)]
-            enhanced = apply_inner_module_to_sequence(features, inner_module, o)
-            scale_out, weights = self.outer_module(enhanced, features)
-
+            scale_out, weights = self._process_scale(features, o)
             scale_outputs[o] = scale_out
             scale_weights[o] = weights
 

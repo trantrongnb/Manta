@@ -76,34 +76,32 @@ def invert_features(x: torch.Tensor) -> torch.Tensor:
     return -x
 
 
-def compute_frame_distance(
+def compute_temporal_l2_distance(
     a: torch.Tensor,
     b: torch.Tensor,
-    reduction: str = 'mean',
+    eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    Compute L2 distance between two temporal sequences frame-by-frame.
+    Compute L2 (Frobenius) norm distance between two temporal sequences.
+
+    Paper Eq. (9): D = ||P̂ − Q̂|| where ||·|| denotes the L2 norm
+    (Frobenius norm for matrices).
+
+    For tensors [*, F, D], this computes:
+        ||a - b||_F = sqrt(Σ_f Σ_d (a[f,d] - b[f,d])²)
 
     Args:
         a: [*, F, D] — first sequence
         b: [*, F, D] — second sequence
-        reduction: How to reduce over frames
-            'mean': average distance across frames (default)
-            'sum': sum of frame distances
-            'none': return per-frame distances
+        eps: Small constant for numerical stability in sqrt
 
     Returns:
-        Scalar or [*] tensor (reduced) or [*, F] tensor (unreduced)
+        [*] tensor — Frobenius norm of (a - b) over last two dims
     """
-    # Per-frame squared L2 distance
-    dist_per_frame = (a - b).pow(2).sum(dim=-1)  # [*, F]
-
-    if reduction == 'mean':
-        return dist_per_frame.mean(dim=-1)  # [*]
-    elif reduction == 'sum':
-        return dist_per_frame.sum(dim=-1)  # [*]
-    else:
-        return dist_per_frame  # [*, F]
+    # Frobenius norm: sqrt of sum of all squared differences over F and D
+    diff_sq = (a - b).pow(2)                # [*, F, D]
+    dist = diff_sq.sum(dim=(-2, -1))        # [*] — sum over F and D
+    return dist.sqrt()                       # [*] — L2 norm (not squared!)
 
 
 def cross_distance_calculation(
@@ -151,23 +149,23 @@ def cross_distance_calculation(
     Q_hat_exp = Q_hat.unsqueeze(1).expand(-1, N, -1, -1)      # [Q, N, F, D]
     Q_check_exp = Q_check.unsqueeze(1).expand(-1, N, -1, -1)  # [Q, N, F, D]
 
-    # D1: Forward-Forward distance ||P̂ - Q̂||
-    D1 = compute_frame_distance(P_hat_exp, Q_hat_exp)  # [Q, N]
+    # D1: Forward-Forward distance ||P̂ - Q̂|| (Eq. 9)
+    D1 = compute_temporal_l2_distance(P_hat_exp, Q_hat_exp)  # [Q, N]
 
-    # D2: Inverted-Inverted distance ||P̌ - Q̌||
-    # Note: ||(-P) - (-Q)|| = ||Q - P|| = ||P - Q|| = D1
-    # But we keep it explicit for clarity and potential future modifications
-    D2 = compute_frame_distance(P_check_exp, Q_check_exp)  # [Q, N]
+    # D2: Inverted-Inverted distance ||P̌ - Q̌|| (Eq. 9)
+    # Note: ||(-P) - (-Q)|| = ||Q - P|| = ||P - Q|| = D1 mathematically
+    # But we keep it explicit to match paper's 4-directional formulation
+    D2 = compute_temporal_l2_distance(P_check_exp, Q_check_exp)  # [Q, N]
 
-    # D3: Forward-Inverted (cross representation) — RECIPROCAL
-    # ||P̂ - Q̌|| = ||P̂ - (-Q̂)|| = ||P̂ + Q̂||
+    # D3: Forward-Inverted (cross representation) — RECIPROCAL (Eq. 9)
+    # ||P̂ - Q̌||^{-1} = 1/||P̂ - (-Q̂)|| = 1/||P̂ + Q̂||
     # For same class: P̂ ≈ Q̂, so ||P̂ + Q̂|| ≈ ||2P̂|| = large → 1/large = small
-    D3_raw = compute_frame_distance(P_hat_exp, Q_check_exp)  # [Q, N]
+    D3_raw = compute_temporal_l2_distance(P_hat_exp, Q_check_exp)  # [Q, N]
     D3 = 1.0 / (D3_raw + eps)  # Reciprocal
 
-    # D4: Inverted-Forward (cross representation) — RECIPROCAL
-    # ||P̌ - Q̂|| = ||(-P̂) - Q̂|| = ||-(P̂ + Q̂)|| = ||P̂ + Q̂||
-    D4_raw = compute_frame_distance(P_check_exp, Q_hat_exp)  # [Q, N]
+    # D4: Inverted-Forward (cross representation) — RECIPROCAL (Eq. 9)
+    # ||P̌ - Q̂||^{-1} = 1/||(-P̂) - Q̂|| = 1/||P̂ + Q̂||
+    D4_raw = compute_temporal_l2_distance(P_check_exp, Q_hat_exp)  # [Q, N]
     D4 = 1.0 / (D4_raw + eps)  # Reciprocal
 
     # Final distance (Eq. 10): average of 4 components

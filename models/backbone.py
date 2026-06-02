@@ -15,6 +15,7 @@ Supported backbones:
     - ViT-B/16 (ImageNet pretrained, D=768)
 """
 
+import os
 import torch
 import torch.nn as nn
 import timm
@@ -31,10 +32,18 @@ class BackboneResNet50(nn.Module):
     Output dimension: D = 2048
     """
 
-    def __init__(self, pretrained: bool = True):
+    def __init__(self, pretrained: bool = True, weights_path: str = None):
         super().__init__()
-        weights = ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
-        base = resnet50(weights=weights)
+        if pretrained and weights_path and os.path.exists(weights_path):
+            # Load from local file
+            base = resnet50(weights=None)
+            state_dict = torch.load(weights_path, map_location='cpu', weights_only=True)
+            base.load_state_dict(state_dict)
+            print(f"  ✓ Loaded ResNet-50 weights from: {weights_path}")
+        else:
+            # Download from torchvision hub (cached after first download)
+            weights = ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
+            base = resnet50(weights=weights)
 
         # Remove avgpool and fc — keep conv feature extractor
         self.features = nn.Sequential(*list(base.children())[:-2])
@@ -66,13 +75,24 @@ class BackboneViTB(nn.Module):
     Output dimension: D = 768
     """
 
-    def __init__(self, pretrained: bool = True):
+    def __init__(self, pretrained: bool = True, weights_path: str = None):
         super().__init__()
-        self.model = timm.create_model(
-            'vit_base_patch16_224',
-            pretrained=pretrained,
-            num_classes=0  # Remove classification head
-        )
+        if pretrained and weights_path and os.path.exists(weights_path):
+            # Load from local file
+            self.model = timm.create_model(
+                'vit_base_patch16_224',
+                pretrained=False,
+                num_classes=0  # Remove classification head
+            )
+            state_dict = torch.load(weights_path, map_location='cpu', weights_only=True)
+            self.model.load_state_dict(state_dict)
+            print(f"  ✓ Loaded ViT-B/16 weights from: {weights_path}")
+        else:
+            self.model = timm.create_model(
+                'vit_base_patch16_224',
+                pretrained=pretrained,
+                num_classes=0  # Remove classification head
+            )
         self.output_dim = 768
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -88,7 +108,8 @@ class BackboneViTB(nn.Module):
         return self.model(x)  # [B, 768]
 
 
-def get_backbone(name: str, pretrained: bool = True, output_dim: int = 2048) -> nn.Module:
+def get_backbone(name: str, pretrained: bool = True, output_dim: int = 2048,
+                 weights_path: str = None) -> nn.Module:
     """
     Factory function to create backbone with optional projection layer.
 
@@ -99,14 +120,15 @@ def get_backbone(name: str, pretrained: bool = True, output_dim: int = 2048) -> 
         name: Backbone architecture name ('resnet50' | 'vitb')
         pretrained: Whether to use ImageNet pretrained weights
         output_dim: Desired output feature dimension
+        weights_path: Optional path to local pretrained weights file
 
     Returns:
         nn.Module with .output_dim attribute indicating the output dimension
     """
     if name == 'resnet50':
-        backbone = BackboneResNet50(pretrained=pretrained)
+        backbone = BackboneResNet50(pretrained=pretrained, weights_path=weights_path)
     elif name == 'vitb':
-        backbone = BackboneViTB(pretrained=pretrained)
+        backbone = BackboneViTB(pretrained=pretrained, weights_path=weights_path)
     else:
         raise ValueError(
             f"Unknown backbone: '{name}'. Supported: 'resnet50', 'vitb'"

@@ -1,0 +1,36 @@
+# 1. Thư mục chứa Dữ liệu (Rất nặng, tốn token nếu Cline cố đọc)
+data/
+datasets/
+lsa64_raw.zip
+*.zip
+*.tar
+*.tar.gz
+*.csv
+*.jsonl
+
+# 2. Thư mục chứa Trọng số Model & Checkpoints (File nhị phân, AI không thể đọc)
+checkpoints/
+pretrained/
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.bin
+*.onnx
+
+# 3. Thư mục Logs & Tracking (Liên tục thay đổi, không mang ý nghĩa logic code)
+logs/
+wandb/
+runs/
+tensorboard/
+*.log
+
+# 4. Cache của Python & Hệ thống
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.vscode/
+
+# 5. Các file tài liệu cá nhân hoặc không liên quan đến logic code (Tùy chọn)
+paper.pdf

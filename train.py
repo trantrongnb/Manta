@@ -21,15 +21,20 @@ import random
 import argparse
 from pathlib import Path
 
-import numpy as np
+# === HOTFIX FOR RTX 5090 (sm_120) / MPS BYPASS ===
+# Disable cuDNN to prevent CUDNN_STATUS_NOT_INITIALIZED crashes
 import torch
+torch.backends.cudnn.enabled = False
+
+import numpy as np
 import torch.optim as optim
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from models.manta import Manta
 from datasets.video_dataset import VideoDataset
-from datasets.episode_sampler import EpisodicSampler
+from datasets.episode_sampler import EpisodicSampler, EpisodeDataset
+from torch.utils.data import DataLoader
 from utils.metrics import compute_accuracy, confidence_interval
 from utils.logger import setup_logger, TensorBoardLogger, Timer
 
@@ -57,6 +62,7 @@ def build_model(cfg) -> Manta:
         lambda_ce=cfg.model.lambda_ce,
         pretrained_backbone=cfg.model.pretrained_backbone,
         freeze_backbone=cfg.model.get('freeze_backbone', True),
+        backbone_weights_path=cfg.model.get('backbone_weights_path', None),
     )
     return model
 
@@ -109,15 +115,26 @@ def evaluate(
     model.eval()
     episode_accuracies = []
 
+    val_episode_ds = EpisodeDataset(
+        dataset=dataset,
+        num_episodes=num_tasks,
+        n_way=cfg.episode.n_way,
+        k_shot=cfg.episode.k_shot,
+        n_query=cfg.episode.num_query,
+    )
+    val_loader = DataLoader(
+        val_episode_ds,
+        batch_size=None,
+        num_workers=cfg.training.get('num_workers', 4),
+        pin_memory=True,
+    )
+
     with torch.no_grad():
-        for _ in range(num_tasks):
-            support, query, sup_labels, que_labels = EpisodicSampler.sample_episode(
-                dataset=dataset,
-                n_way=cfg.episode.n_way,
-                k_shot=cfg.episode.k_shot,
-                n_query=cfg.episode.num_query,
-                device=device,
-            )
+        for support, query, sup_labels, que_labels in val_loader:
+            support = support.to(device, non_blocking=True)
+            query = query.to(device, non_blocking=True)
+            sup_labels = sup_labels.to(device, non_blocking=True)
+            que_labels = que_labels.to(device, non_blocking=True)
 
             result = model(
                 support_videos=support,
@@ -204,17 +221,30 @@ def train(cfg, resume_path: str = None):
     # ==================== Training Loop ====================
     logger.info(f"Starting training from task {start_task} to {cfg.training.num_tasks}")
 
+    train_episode_ds = EpisodeDataset(
+        dataset=train_dataset,
+        num_episodes=cfg.training.num_tasks - start_task,
+        n_way=cfg.episode.n_way,
+        k_shot=cfg.episode.k_shot,
+        n_query=cfg.episode.num_query,
+    )
+    train_loader = DataLoader(
+        train_episode_ds,
+        batch_size=None,
+        num_workers=cfg.training.get('num_workers', 4),
+        pin_memory=True,
+    )
+
     model.train()
 
-    for task_idx in tqdm(range(start_task, cfg.training.num_tasks), desc="Training"):
-        # --- Sample episode ---
-        support, query, sup_labels, que_labels = EpisodicSampler.sample_episode(
-            dataset=train_dataset,
-            n_way=cfg.episode.n_way,
-            k_shot=cfg.episode.k_shot,
-            n_query=cfg.episode.num_query,
-            device=device,
-        )
+    for task_idx, (support, query, sup_labels, que_labels) in zip(
+        range(start_task, cfg.training.num_tasks), 
+        tqdm(train_loader, desc="Training")
+    ):
+        support = support.to(device, non_blocking=True)
+        query = query.to(device, non_blocking=True)
+        sup_labels = sup_labels.to(device, non_blocking=True)
+        que_labels = que_labels.to(device, non_blocking=True)
 
         # --- Forward pass ---
         result = model(
@@ -250,7 +280,7 @@ def train(cfg, resume_path: str = None):
                 loss=loss.item(),
                 accuracy=result['accuracy'].item(),
                 L_ce=result['L_ce'].item(),
-                L_hc=result['L_hc'].item() if isinstance(result['L_hc'], torch.Tensor) else result['L_hc'],
+                L_hc=result['L_hc'].item(),
                 lr=current_lr,
             )
 
@@ -260,7 +290,7 @@ def train(cfg, resume_path: str = None):
                 logger.info(
                     f"Task {task_idx}/{cfg.training.num_tasks} | "
                     f"Loss: {loss.item():.4f} (CE: {result['L_ce'].item():.4f}, "
-                    f"HC: {result['L_hc'].item() if isinstance(result['L_hc'], torch.Tensor) else result['L_hc']:.4f}) | "
+                    f"HC: {result['L_hc'].item():.4f}) | "
                     f"Acc: {result['accuracy'].item()*100:.1f}% | "
                     f"LR: {current_lr:.6f} | ETA: {eta}"
                 )

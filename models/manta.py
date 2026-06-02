@@ -80,6 +80,7 @@ class Manta(nn.Module):
         lambda_ce: float = 4.0,
         pretrained_backbone: bool = True,
         freeze_backbone: bool = True,
+        backbone_weights_path: str = None,
     ):
         super().__init__()
         self.d_model = d_model
@@ -91,6 +92,7 @@ class Manta(nn.Module):
             name=backbone_name,
             pretrained=pretrained_backbone,
             output_dim=d_model,
+            weights_path=backbone_weights_path,
         )
         if freeze_backbone:
             for param in self.backbone.parameters():
@@ -225,7 +227,7 @@ class Manta(nn.Module):
         # --- L_ce: Cross-entropy loss from distance-based logits ---
         # Convert distances to logits (negate: smaller distance = higher logit)
         logits = -distances  # [Q, N]
-        L_ce = F.cross_entropy(logits, query_labels)
+        L_ce = torch.nn.functional.cross_entropy(logits, query_labels)
 
         # --- L_hc: Hybrid Contrastive Loss ---
         contrastive_result = self.contrastive_loss_fn(

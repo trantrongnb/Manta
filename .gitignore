@@ -1,0 +1,59 @@
+# ======================
+# MANTA .gitignore
+# ======================
+
+# === Model Weights & Checkpoints ===
+checkpoints/
+pretrained/
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.bin
+*.onnx
+
+# === Data ===
+data/
+datasets/
+all/
+lsa64_raw.zip
+*.zip
+*.tar
+*.tar.gz
+*.csv
+*.jsonl
+
+# === Logs & TensorBoard ===
+logs/
+wandb/
+runs/
+tensorboard/
+*.log
+
+# === Python Cache ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# === IDE & Editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Environment & Build ===
+.env
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# === Misc ===
+*.pdf

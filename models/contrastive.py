@@ -286,7 +286,8 @@ class HybridContrastiveLoss(nn.Module):
 
         return {
             'loss': L_hc,
-            'L_S': L_S.item() if L_S.requires_grad else L_S,
-            'L_Q': L_Q.item() if L_Q.requires_grad else L_Q,
-            'L_SQ': L_SQ.item() if L_SQ.requires_grad else L_SQ,
+            'L_S': L_S.detach(),
+            'L_Q': L_Q.detach(),
+            'L_SQ': L_SQ.detach(),
         }
+
